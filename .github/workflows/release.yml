@@ -1,0 +1,114 @@
+name: Release charm to Charmhub and GitHub
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grafana-mcp-vm-latest-edge
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Charmcraft
+        run: sudo snap install charmcraft --classic --channel latest/stable
+
+      - name: Build ubuntu@24.04:amd64 charm
+        run: sudo charmcraft pack --destructive-mode --platform amd64 --quiet
+
+      - name: Check packaged source
+        run: |
+          python3 - <<'PY'
+          from zipfile import ZipFile
+
+          with ZipFile('grafana-mcp-vm_amd64.charm') as charm:
+              packaged = charm.namelist()
+          assert 'src/charm.py' in packaged
+          assert 'src/workload.py' in packaged
+          assert not any(name.startswith('src/__pycache__/') for name in packaged)
+          PY
+
+      - name: Upload charm artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: charm-ubuntu-24-amd64
+          path: ./grafana-mcp-vm_amd64.charm
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      revision: ${{ steps.upload.outputs.revision }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download charm artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: charm-ubuntu-24-amd64
+          path: .
+
+      - name: Install Charmcraft
+        run: sudo snap install charmcraft --classic --channel latest/stable
+
+      - name: Upload to latest/edge
+        id: upload
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHARMCRAFT_AUTH" ]]; then
+            echo 'CHARMHUB_TOKEN is not configured' >&2
+            exit 1
+          fi
+          output="$(charmcraft upload --format json --release latest/edge ./grafana-mcp-vm_amd64.charm)"
+          revision="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["revision"])' <<< "$output")"
+          if [[ ! "$revision" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'Charmcraft did not return a valid revision' >&2
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+  github-release:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download charm artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: charm-ubuntu-24-amd64
+          path: .
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        with:
+          tag_name: latest-edge-r${{ needs.release.outputs.revision }}
+          name: Charmhub latest/edge revision ${{ needs.release.outputs.revision }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Published to Charmhub latest/edge as revision ${{ needs.release.outputs.revision }}.
+            Source commit: ${{ github.sha }}.
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: ./grafana-mcp-vm_amd64.charm

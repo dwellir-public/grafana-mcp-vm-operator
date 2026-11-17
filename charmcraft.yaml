@@ -1,0 +1,46 @@
+type: charm
+name: grafana-mcp-vm
+title: Grafana MCP VM
+summary: Read-only Grafana MCP server on Ubuntu machines.
+description: |
+  Runs a pinned Grafana MCP server with Grafana and caller credentials supplied
+  through Juju secrets. The prototype binds to loopback by default.
+base: ubuntu@24.04
+platforms:
+  amd64:
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
+    prime:
+      - "*"
+      - "-src/__pycache__/**"
+      - "-src/**/*.pyc"
+config:
+  options:
+    grafana-url:
+      type: string
+      default: ""
+      description: HTTPS URL of the Grafana Cloud stack.
+    grafana-token-secret:
+      type: string
+      default: ""
+      description: Juju secret ID containing a token field with the Grafana service account token.
+    caller-token-secret:
+      type: string
+      default: ""
+      description: Juju secret ID containing the MCP caller bearer token.
+    listen-address:
+      type: string
+      default: 127.0.0.1
+      description: Loopback or Tailscale IPv4 address on which to serve MCP.
+    listen-port:
+      type: int
+      default: 8000
+      description: Local Streamable HTTP port.
+    allowed-host:
+      type: string
+      default: ""
+      description: Optional exact public DNS hostname accepted in the MCP Host header.
